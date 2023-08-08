@@ -76,7 +76,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          repository: yuzu-emu/yuzu
+          repository: yuzu-emu/yuzu-mainline
           submodules: recursive
           fetch-depth: 0
       - name: Checkout patches
@@ -87,57 +87,31 @@ jobs:
         shell: pwsh
         run: |
           if ("$env:OPTIMIZATION_FLAG" -eq "SSE") {
-              git apply .\patches\patches\cmakelists_SSE.patch
+              git apply .\patches\optionalPatches\cmakelists_SSE.patch
           }
           if ("$env:OPTIMIZATION_FLAG" -eq "SSE2") {
-              git apply .\patches\patches\cmakelists_SSE2.patch
+              git apply .\patches\optionalPatches\cmakelists_SSE2.patch
           }
           if ("$env:OPTIMIZATION_FLAG" -eq "AVX") {
-              git apply .\patches\patches\cmakelists_AVX.patch
+              git apply .\patches\optionalPatches\cmakelists_AVX.patch
           }
           if ("$env:OPTIMIZATION_FLAG" -eq "AVX2") {
-              git apply .\patches\patches\cmakelists_AVX2.patch
+              git apply .\patches\optionalPatches\cmakelists_AVX2.patch
           }
           if ("$env:OPTIMIZATION_FLAG" -eq "AVX512") {
-              git apply .\patches\patches\cmakelists_AVX512.patch
+              git apply .\patches\optionalPatches\cmakelists_AVX512.patch
           }
-          git apply .\patches\patches\gdbstub.patch
-          git apply .\patches\patches\screenshots.patch
-          git apply .\patches\patches\upload.patch
           if ("$env:SHADOWFLICKERPATCH" -eq "true") {
-              git apply .\patches\patches\shadowFlicker.patch
+              git apply .\patches\optionalPatches\shadowFlicker.patch
           }
-      - name: Configure git
-        run: |
-          git config --global user.email "yuzu@yuzu-emu.org"
-          git config --global user.name "yuzubot"
-          git config --global pull.rebase true
-          git config --global rebase.autoStash true
-          git config --global fetch.prune true
+
+          $patchFiles = Get-ChildItem ".\patches\defaultPatches\"
+          foreach ($file in $patchFiles) {
+              git apply "$file"
+          }
       - name: Install Vulkan SDK
         shell: pwsh
         run: .\.ci\scripts\windows\install-vulkan-sdk.ps1
-      - name: Merge PRs
-        uses: actions/github-script@v6
-        with: 
-          script: |
-            const myExec = async (command) => await exec.getExecOutput('"C:\\Program Files\\Git\\bin\\bash.exe"',["-c",command],{silent: true}).then(result => result.stdout.trim()).catch(err => {console.log(err) ; return false })
-            const prs = await github.rest.search.issuesAndPullRequests({
-              q: "type:pr+is:open+repo:yuzu-emu/yuzu+label:early-access-merge,mainline-merge+-label:android,android-merge",
-              sort: "updated",
-              order: "asc",
-              per_page: 100
-            }).then(res => res.data.items);
-            for (const pr of prs) {
-              console.log(`Merge "${pr.title}" ${pr.pull_request.html_url}`);
-              let pn = pr.number;
-              await myExec(`git fetch "https://github.com/yuzu-emu/yuzu.git" "pull/${pn}/head:pr-${pn}" -f --no-recurse-submodules`);
-              await myExec(`git merge --squash "pr-${pn}"`)
-              await myExec(`git commit -m "${pr.title}" `)
-            };
-            let body = await myExec(`GIT_BRANCH=$(git name-rev --name-only HEAD) && git log origin/$GIT_BRANCH..$GIT_BRANCH --pretty=format:"%s"`)
-            core.exportVariable("body",body);
-            core.exportVariable("time",new Date().toISOString().slice(0,16))
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
       - name: Configure
@@ -153,23 +127,13 @@ jobs:
           cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_POLICY_DEFAULT_CMP0069=NEW -DYUZU_ENABLE_LTO=ON -DYUZU_USE_BUNDLED_QT=1 -DYUZU_USE_BUNDLED_SDL2=1 -DYUZU_USE_QT_WEB_ENGINE="$env:YUZU_USE_QT_WEB_ENGINE" -DENABLE_COMPATIBILITY_LIST_DOWNLOAD=ON -DYUZU_ENABLE_COMPATIBILITY_REPORTING=OFF -DYUZU_TESTS=OFF -DUSE_DISCORD_PRESENCE="$env:USE_DISCORD_PRESENCE" -DENABLE_QT_TRANSLATION=ON -DDISPLAY_VERSION="early-access" -DCMAKE_BUILD_TYPE=Release -DYUZU_CRASH_DUMPS="$env:YUZU_CRASH_DUMPS" -DENABLE_CUBEB="$env:ENABLE_CUBEB" -DENABLE_LIBUSB="$env:ENABLE_LIBUSB" -DENABLE_WEB_SERVICE="$env:ENABLE_WEB_SERVICE" -DYUZU_ROOM="$env:YUZU_ROOM" ..
       - name: Build
         run: msbuild "build/yuzu.sln" /m /p:Configuration=Release
-      - name: Pack
-        shell: pwsh
-        run: .\.ci\scripts\windows\upload.ps1
-      # - name: Upload
-      #   uses: actions/upload-artifact@v3
-      #   with:
-      #     name: windows
-      #     path: artifacts/
-      # - name: Upload EXE
-      #   uses: actions/upload-artifact@v3
-      #   with:
-      #     name: windows(only exe)
-      #     path: artifacts/yuzu.exe
       - name: Pack 7z
-        shell: cmd
-        run:
-          7z a -m0=lzma2 -mx=9 -ms=on yuzu-windows.7z artifacts/*
+        shell: pwsh
+        run: |
+          .\.ci\scripts\windows\upload.ps1
+          cd artifacts
+          echo "${{ toJSON(inputs) }}" >> BuildConfig.json
+          7z a -m0=lzma2 -mx=9 -ms=on ..\yuzu-windows.7z *
       - name: Upload 7z
         uses: actions/upload-artifact@v3
         with:
@@ -179,9 +143,7 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           artifacts: "yuzu-windows.7z"
-          name: "${{ env.time }}"
-          body: "${{ env.body }}"
-          tag: "release"
+          tag: "${{ env.BUILD_TAG }}"
           allowUpdates: true
           artifactErrorsFailBuild: false
           prerelease: false
